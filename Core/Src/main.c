@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -56,16 +57,45 @@ UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 
-#define MIN_STABLE_CPS 6560
-#define MAX_STABLE_CPS 8280
-#define BASE_CPS 5687
+// Motor calibration data - add after existing PID variables
+// PWM-to-CPS lookup tables (from your calibration data)
+static const uint16_t motor1_pwm_table[] = {400, 500, 600, 700, 800, 900, 1000};
+static const uint16_t motor1_cps_table[] = {6563, 7129, 7491, 7751, 7951, 8104, 8345};
+static const uint16_t motor2_pwm_table[] = {400, 500, 600, 700, 800, 900, 1000};
+static const uint16_t motor2_cps_table[] = {6194, 6893, 7307, 7608, 7839, 8004, 8279};
+static const uint8_t table_size = 7;
+
+// Motor synchronization factor
+static const float motor_sync_factor = 1.0247f;
+
+// PWM bounds from calibration
+#define MIN_STABLE_PWM 400
+#define MAX_STABLE_PWM 1000
+#define MIN_STABLE_CPS_M1 6563
+#define MAX_STABLE_CPS_M1 8345
+#define MIN_STABLE_CPS_M2 6194
+#define MAX_STABLE_CPS_M2 8279
+
+// Confidence interval (6% from your CV data)
+#define CPS_TOLERANCE_PERCENT 6
+
+// Current PWM values for each motor
+volatile uint16_t current_pwm_1 = 0;
+volatile uint16_t current_pwm_2 = 0;
+
+// Integral accumulator for PID
+volatile long integral_1 = 0;
+volatile long integral_2 = 0;
 
 #define NUM_SENSORS 16
 #define CALIB_SAMPLES_PER_SENSOR 50
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
-int KP1=0,KP2=0,KD1,KD2=0,KI1=0,KI2=0;
+int KP1 = 10, KP2 = 8;   // Start lower
+int KI1 = 2, KI2 = 2;    // Start very low
+int KD1 = 5, KD2 = 5;    // Moderate damping
+
 volatile int current_encoder1_count=0;
 volatile int current_encoder2_count=0;
 volatile int last_encoder1_count=0;
@@ -115,6 +145,30 @@ static void MX_TIM10_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+// Linear interpolation function for CPS to PWM conversion
+uint16_t cps_to_pwm(uint16_t target_cps, const uint16_t *cps_table, const uint16_t *pwm_table, uint8_t table_len) {
+    // Bounds check
+    if (target_cps <= cps_table[0]) return pwm_table[0];
+    if (target_cps >= cps_table[table_len-1]) return pwm_table[table_len-1];
+
+    // Find interpolation range
+    for (uint8_t i = 0; i < table_len - 1; i++) {
+        if (target_cps >= cps_table[i] && target_cps <= cps_table[i+1]) {
+            // Linear interpolation
+            float ratio = (float)(target_cps - cps_table[i]) / (float)(cps_table[i+1] - cps_table[i]);
+            return pwm_table[i] + (uint16_t)(ratio * (pwm_table[i+1] - pwm_table[i]));
+        }
+    }
+    return pwm_table[0]; // Fallback
+}
+
+// Target validation function
+uint8_t validate_target_cps(uint16_t target_cps_1, uint16_t target_cps_2) {
+    if (target_cps_1 < MIN_STABLE_CPS_M1 || target_cps_1 > MAX_STABLE_CPS_M1) return 0;
+    if (target_cps_2 < MIN_STABLE_CPS_M2 || target_cps_2 > MAX_STABLE_CPS_M2) return 0;
+    return 1;
+}
+
 void setMuxChannel(uint8_t ch)
 {
     if(ch >= 16) return;
@@ -132,26 +186,94 @@ void main_pid_loop(void){
 
 void motor_pid_loop(void)
 {
+    // Read encoder counts
     current_encoder1_count = __HAL_TIM_GET_COUNTER(&htim2);
     current_encoder2_count = __HAL_TIM_GET_COUNTER(&htim5);
 
-    current_cps_1=(current_encoder1_count-last_encoder1_count)*1000;
-    current_cps_2=(current_encoder2_count-last_encoder2_count)*1000;
+    // Calculate current CPS
+    current_cps_1 = (current_encoder1_count - last_encoder1_count) * 1000;
+    current_cps_2 = (current_encoder2_count - last_encoder2_count) * 1000;
 
-    error_1=target_cps_1-current_cps_1;
-    error_2=target_cps_2-current_cps_2;
+    // Validate target CPS is within stable range
+    if (!validate_target_cps(target_cps_1, target_cps_2)) {
+        // Clamp targets to stable range
+        if (target_cps_1 < MIN_STABLE_CPS_M1) target_cps_1 = MIN_STABLE_CPS_M1;
+        if (target_cps_1 > MAX_STABLE_CPS_M1) target_cps_1 = MAX_STABLE_CPS_M1;
+        if (target_cps_2 < MIN_STABLE_CPS_M2) target_cps_2 = MIN_STABLE_CPS_M2;
+        if (target_cps_2 > MAX_STABLE_CPS_M2) target_cps_2 = MAX_STABLE_CPS_M2;
+    }
 
-    pid_1=KP1*error_1+(KI1*(error_1+last_error_1))/1000+(KD1*(error_1-last_error_1))*1000;
-    pid_2=KP2*error_2+(KI2*(error_2+last_error_2))/1000+(KD2*(error_2-last_error_2))*1000;
+    // Calculate errors
+    error_1 = target_cps_1 - current_cps_1;
+    error_2 = target_cps_2 - current_cps_2;
 
+    // Check if within tolerance (steady-state detection)
+    uint16_t tolerance_1 = (target_cps_1 * CPS_TOLERANCE_PERCENT) / 100;
+    uint16_t tolerance_2 = (target_cps_2 * CPS_TOLERANCE_PERCENT) / 100;
 
-    last_encoder1_count=current_encoder1_count;
-    last_encoder2_count=current_encoder2_count;
-    last_error_1=error_1;
-    last_error_2=error_2;
+    // Only apply PID if error is significant (beyond normal variance)
+    if (abs(error_1) > tolerance_1) {
+        // Update integral with windup protection
+        integral_1 += error_1;
+        if (integral_1 > 10000) integral_1 = 10000;
+        if (integral_1 < -10000) integral_1 = -10000;
 
+        // Calculate PID output
+        pid_1 = KP1 * error_1 + (KI1 * integral_1) / 1000 + KD1 * (error_1 - last_error_1);
+
+        // Smart PWM initialization if this is a new target
+        static uint16_t last_target_cps_1 = 0;
+        if (target_cps_1 != last_target_cps_1) {
+            current_pwm_1 = cps_to_pwm(target_cps_1, motor1_cps_table, motor1_pwm_table, table_size);
+            integral_1 = 0; // Reset integral on new target
+            last_target_cps_1 = target_cps_1;
+        }
+
+        // Apply PID correction to current PWM
+        current_pwm_1 += pid_1 / 100; // Scale PID output appropriately
+    }
+
+    if (abs(error_2) > tolerance_2) {
+        // Update integral with windup protection
+        integral_2 += error_2;
+        if (integral_2 > 10000) integral_2 = 10000;
+        if (integral_2 < -10000) integral_2 = -10000;
+
+        // Calculate PID output
+        pid_2 = KP2 * error_2 + (KI2 * integral_2) / 1000 + KD2 * (error_2 - last_error_2);
+
+        // Smart PWM initialization if this is a new target
+        static uint16_t last_target_cps_2 = 0;
+        if (target_cps_2 != last_target_cps_2) {
+            // Apply synchronization factor for motor 2
+            uint16_t base_pwm = cps_to_pwm(target_cps_2, motor2_cps_table, motor2_pwm_table, table_size);
+            current_pwm_2 = (uint16_t)(base_pwm / motor_sync_factor);
+            integral_2 = 0; // Reset integral on new target
+            last_target_cps_2 = target_cps_2;
+        }
+
+        // Apply PID correction to current PWM
+        current_pwm_2 += pid_2 / 100; // Scale PID output appropriately
+    }
+
+    // Enforce PWM bounds (critical safety feature)
+    if (current_pwm_1 < MIN_STABLE_PWM) current_pwm_1 = MIN_STABLE_PWM;
+    if (current_pwm_1 > MAX_STABLE_PWM) current_pwm_1 = MAX_STABLE_PWM;
+    if (current_pwm_2 < MIN_STABLE_PWM) current_pwm_2 = MIN_STABLE_PWM;
+    if (current_pwm_2 > MAX_STABLE_PWM) current_pwm_2 = MAX_STABLE_PWM;
+
+    // Apply PWM to motors
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, current_pwm_1);
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); // Motor 1 forward
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, current_pwm_2);
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, 0); // Motor 2 forward
+
+    // Update history
+    last_encoder1_count = current_encoder1_count;
+    last_encoder2_count = current_encoder2_count;
+    last_error_1 = error_1;
+    last_error_2 = error_2;
 }
-
 
 void ir_calibration(void){
 	uint16_t current_val=0;
@@ -369,6 +491,9 @@ int main(void)
 
 
   HAL_Delay(5000);
+  target_cps_1=7000;
+  target_cps_2=7000;
+
 
   /* USER CODE END 2 */
 
