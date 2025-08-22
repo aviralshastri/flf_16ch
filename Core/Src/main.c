@@ -23,7 +23,6 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <string.h>
-#include "lookup_table_motor_sync.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -57,8 +56,8 @@ UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 
-#define MIN_STABLE_CPS 3029
-#define MAX_STABLE_CPS 8346
+#define MIN_STABLE_CPS 6560
+#define MAX_STABLE_CPS 8280
 #define BASE_CPS 5687
 
 #define NUM_SENSORS 16
@@ -93,6 +92,7 @@ volatile uint8_t adc_buffer_read_ptr_index = 1;
 volatile uint8_t current_sensor_index = 0;
 volatile uint16_t adc_dma_single_value;
 static uint16_t thresholds[NUM_SENSORS]={0};
+volatile uint16_t timer4_counter=0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -170,6 +170,8 @@ void ir_calibration(void){
 		HAL_Delay(10);
 	}
 }
+
+
 
 void encoder_calibration(void){
     char buffer[150];
@@ -251,13 +253,14 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim)
     }
     else if(htim->Instance == TIM4)
     {
-    	//motor correction loop
     	motor_pid_loop();
-    }
-    else if(htim->Instance == TIM9)
-    {
-    	//main pid loop
-    	main_pid_loop();
+    	timer4_counter++;
+
+    	if (timer4_counter>=2){
+    		main_pid_loop();
+    		timer4_counter=0;
+    	}
+
     }
 }
 
@@ -367,8 +370,6 @@ int main(void)
 
   HAL_Delay(5000);
 
-  set_cps_motor_1 = 5000;  // Target 100 counts per second
-  set_cps_motor_2 = 5000;  // Target 100 counts per second
   /* USER CODE END 2 */
 
   /* Infinite loop */
