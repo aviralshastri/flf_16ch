@@ -51,9 +51,9 @@ TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
 TIM_HandleTypeDef htim5;
 TIM_HandleTypeDef htim9;
-TIM_HandleTypeDef htim10;
 
 UART_HandleTypeDef huart1;
+DMA_HandleTypeDef hdma_usart1_rx;
 
 /* USER CODE BEGIN PV */
 
@@ -137,7 +137,6 @@ static void MX_TIM5_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_TIM4_Init(void);
 static void MX_TIM9_Init(void);
-static void MX_TIM10_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -145,24 +144,20 @@ static void MX_TIM10_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-// Linear interpolation function for CPS to PWM conversion
 uint16_t cps_to_pwm(uint16_t target_cps, const uint16_t *cps_table, const uint16_t *pwm_table, uint8_t table_len) {
-    // Bounds check
     if (target_cps <= cps_table[0]) return pwm_table[0];
     if (target_cps >= cps_table[table_len-1]) return pwm_table[table_len-1];
 
-    // Find interpolation range
     for (uint8_t i = 0; i < table_len - 1; i++) {
         if (target_cps >= cps_table[i] && target_cps <= cps_table[i+1]) {
-            // Linear interpolation
             float ratio = (float)(target_cps - cps_table[i]) / (float)(cps_table[i+1] - cps_table[i]);
             return pwm_table[i] + (uint16_t)(ratio * (pwm_table[i+1] - pwm_table[i]));
         }
     }
-    return pwm_table[0]; // Fallback
+    return pwm_table[0];
 }
 
-// Target validation function
+
 uint8_t validate_target_cps(uint16_t target_cps_1, uint16_t target_cps_2) {
     if (target_cps_1 < MIN_STABLE_CPS_M1 || target_cps_1 > MAX_STABLE_CPS_M1) return 0;
     if (target_cps_2 < MIN_STABLE_CPS_M2 || target_cps_2 > MAX_STABLE_CPS_M2) return 0;
@@ -213,24 +208,21 @@ void motor_pid_loop(void)
 
     // Only apply PID if error is significant (beyond normal variance)
     if (abs(error_1) > tolerance_1) {
-        // Update integral with windup protection
+
         integral_1 += error_1;
         if (integral_1 > 10000) integral_1 = 10000;
         if (integral_1 < -10000) integral_1 = -10000;
 
-        // Calculate PID output
         pid_1 = KP1 * error_1 + (KI1 * integral_1) / 1000 + KD1 * (error_1 - last_error_1);
 
-        // Smart PWM initialization if this is a new target
         static uint16_t last_target_cps_1 = 0;
         if (target_cps_1 != last_target_cps_1) {
             current_pwm_1 = cps_to_pwm(target_cps_1, motor1_cps_table, motor1_pwm_table, table_size);
-            integral_1 = 0; // Reset integral on new target
+            integral_1 = 0;
             last_target_cps_1 = target_cps_1;
         }
 
-        // Apply PID correction to current PWM
-        current_pwm_1 += pid_1 / 100; // Scale PID output appropriately
+        current_pwm_1 += pid_1 / 100;
     }
 
     if (abs(error_2) > tolerance_2) {
@@ -264,9 +256,9 @@ void motor_pid_loop(void)
 
     // Apply PWM to motors
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, current_pwm_1);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); // Motor 1 forward
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, current_pwm_2);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, 0); // Motor 2 forward
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, current_pwm_2);
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 0);
 
     // Update history
     last_encoder1_count = current_encoder1_count;
@@ -472,7 +464,6 @@ int main(void)
   MX_USART1_UART_Init();
   MX_TIM4_Init();
   MX_TIM9_Init();
-  MX_TIM10_Init();
   /* USER CODE BEGIN 2 */
 
   HAL_TIM_Base_Start_IT(&htim3);
@@ -493,7 +484,6 @@ int main(void)
   HAL_Delay(5000);
   target_cps_1=7000;
   target_cps_2=7000;
-
 
   /* USER CODE END 2 */
 
@@ -893,6 +883,7 @@ static void MX_TIM9_Init(void)
   /* USER CODE END TIM9_Init 0 */
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
 
   /* USER CODE BEGIN TIM9_Init 1 */
 
@@ -900,9 +891,9 @@ static void MX_TIM9_Init(void)
   htim9.Instance = TIM9;
   htim9.Init.Prescaler = 100-1;
   htim9.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim9.Init.Period = 2000-1;
+  htim9.Init.Period = 20000-1;
   htim9.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim9.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  htim9.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim9) != HAL_OK)
   {
     Error_Handler();
@@ -912,40 +903,7 @@ static void MX_TIM9_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN TIM9_Init 2 */
-
-  /* USER CODE END TIM9_Init 2 */
-
-}
-
-/**
-  * @brief TIM10 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM10_Init(void)
-{
-
-  /* USER CODE BEGIN TIM10_Init 0 */
-
-  /* USER CODE END TIM10_Init 0 */
-
-  TIM_OC_InitTypeDef sConfigOC = {0};
-
-  /* USER CODE BEGIN TIM10_Init 1 */
-
-  /* USER CODE END TIM10_Init 1 */
-  htim10.Instance = TIM10;
-  htim10.Init.Prescaler = 0;
-  htim10.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim10.Init.Period = 65535;
-  htim10.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim10.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim10) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_Init(&htim10) != HAL_OK)
+  if (HAL_TIM_PWM_Init(&htim9) != HAL_OK)
   {
     Error_Handler();
   }
@@ -953,14 +911,14 @@ static void MX_TIM10_Init(void)
   sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim10, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  if (HAL_TIM_PWM_ConfigChannel(&htim9, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN TIM10_Init 2 */
+  /* USER CODE BEGIN TIM9_Init 2 */
 
-  /* USER CODE END TIM10_Init 2 */
-  HAL_TIM_MspPostInit(&htim10);
+  /* USER CODE END TIM9_Init 2 */
+  HAL_TIM_MspPostInit(&htim9);
 
 }
 
