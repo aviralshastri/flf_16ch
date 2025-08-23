@@ -87,6 +87,10 @@ volatile uint16_t current_pwm_2 = 0;
 volatile long integral_1 = 0;
 volatile long integral_2 = 0;
 
+// MOVE THESE VARIABLES HERE (GLOBAL SCOPE)
+volatile uint32_t last_pid_time = 0;
+volatile uint8_t motors_initialized = 0;
+
 #define NUM_SENSORS 16
 #define CALIB_SAMPLES_PER_SENSOR 50
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -111,6 +115,8 @@ volatile int last_error_2=0;
 volatile int pid_1=0;
 volatile int pid_2=0;
 
+// Debug counter
+volatile uint32_t debug_counter = 0;
 
 volatile uint16_t adc_buffers[2][NUM_SENSORS] = {0};
 volatile uint16_t *adc_buffer_ptrs[2] = {
@@ -123,9 +129,6 @@ volatile uint8_t current_sensor_index = 0;
 volatile uint16_t adc_dma_single_value;
 static uint16_t thresholds[NUM_SENSORS]={0};
 volatile uint16_t timer4_counter=0;
-/* USER CODE END PV */
-
-/* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
@@ -133,16 +136,27 @@ static void MX_ADC1_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
-static void MX_TIM5_Init(void);
-static void MX_USART1_UART_Init(void);
 static void MX_TIM4_Init(void);
+static void MX_TIM5_Init(void);
 static void MX_TIM9_Init(void);
+static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/* USER CODE BEGIN 0 */
+
+// Add this function to redirect printf to UART (ONLY ADDITION)
+int _write(int file, char *ptr, int len)
+{
+    HAL_UART_Transmit(&huart1, (uint8_t*)ptr, len, HAL_MAX_DELAY);
+    return len;
+}
+
+// ... keep all your existing functions exactly as they were ...
 
 uint16_t cps_to_pwm(uint16_t target_cps, const uint16_t *cps_table, const uint16_t *pwm_table, uint8_t table_len) {
     if (target_cps <= cps_table[0]) return pwm_table[0];
@@ -156,7 +170,6 @@ uint16_t cps_to_pwm(uint16_t target_cps, const uint16_t *cps_table, const uint16
     }
     return pwm_table[0];
 }
-
 
 uint8_t validate_target_cps(uint16_t target_cps_1, uint16_t target_cps_2) {
     if (target_cps_1 < MIN_STABLE_CPS_M1 || target_cps_1 > MAX_STABLE_CPS_M1) return 0;
@@ -178,93 +191,103 @@ void main_pid_loop(void){
 
 }
 
-
-void motor_pid_loop(void)
+uint16_t get_pwm_from_cps(uint16_t target_cps,
+                          const uint16_t* pwm_table,
+                          const uint16_t* cps_table,
+                          uint8_t size)
 {
-    // Read encoder counts
+    for (int i = 0; i < size - 1; i++) {
+        if (target_cps >= cps_table[i] && target_cps <= cps_table[i+1]) {
+            float ratio = (float)(target_cps - cps_table[i]) /
+                          (cps_table[i+1] - cps_table[i]);
+            return pwm_table[i] + (uint16_t)(ratio * (pwm_table[i+1] - pwm_table[i]));
+        }
+    }
+    if (target_cps < cps_table[0]) return pwm_table[0];
+    else return pwm_table[size - 1];
+}
+
+void motor_pid_loop()
+{
+    // ---- Motor 1 ----
     current_encoder1_count = __HAL_TIM_GET_COUNTER(&htim2);
-    current_encoder2_count = __HAL_TIM_GET_COUNTER(&htim5);
+    __HAL_TIM_SET_COUNTER(&htim2, 0);
+    current_cps_1 = current_encoder1_count * 10;   // CPS per 100ms
 
-    // Calculate current CPS
-    current_cps_1 = (current_encoder1_count - last_encoder1_count) * 1000;
-    current_cps_2 = (current_encoder2_count - last_encoder2_count) * 1000;
+    error_1 = target_cps_1 - current_cps_1;
 
-    // Validate target CPS is within stable range
-    if (!validate_target_cps(target_cps_1, target_cps_2)) {
-        // Clamp targets to stable range
-        if (target_cps_1 < MIN_STABLE_CPS_M1) target_cps_1 = MIN_STABLE_CPS_M1;
-        if (target_cps_1 > MAX_STABLE_CPS_M1) target_cps_1 = MAX_STABLE_CPS_M1;
-        if (target_cps_2 < MIN_STABLE_CPS_M2) target_cps_2 = MIN_STABLE_CPS_M2;
-        if (target_cps_2 > MAX_STABLE_CPS_M2) target_cps_2 = MAX_STABLE_CPS_M2;
+    if (target_cps_1 > 0) {
+        integral_1 += error_1;
+        int derivative1 = error_1 - last_error_1;
+        pid_1 = KP1 * error_1 + KI1 * integral_1 + KD1 * derivative1;
+
+        int pwm1 = current_pwm_1 + (pid_1 / 100);
+
+        // Use calibration table if motor is starting
+        if (current_pwm_1 == 0 && current_cps_1 == 0) {
+            pwm1 = get_pwm_from_cps(target_cps_1, motor1_pwm_table, motor1_cps_table, table_size);
+        }
+
+        if (pwm1 < 0) pwm1 = 0;
+        if (pwm1 > 1000) pwm1 = 1000;
+
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, pwm1);
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
+
+        current_pwm_1 = pwm1;
+        last_error_1 = error_1;
+    } else {
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
+        current_pwm_1 = 0;
+        integral_1 = 0;
+        last_error_1 = 0;
     }
 
-    // Calculate errors
-    error_1 = target_cps_1 - current_cps_1;
+    // ---- Motor 2 ----
+    current_encoder2_count = __HAL_TIM_GET_COUNTER(&htim5);
+    __HAL_TIM_SET_COUNTER(&htim5, 0);
+    current_cps_2 = current_encoder2_count * 10;
+
     error_2 = target_cps_2 - current_cps_2;
 
-    // Check if within tolerance (steady-state detection)
-    uint16_t tolerance_1 = (target_cps_1 * CPS_TOLERANCE_PERCENT) / 100;
-    uint16_t tolerance_2 = (target_cps_2 * CPS_TOLERANCE_PERCENT) / 100;
-
-    // Only apply PID if error is significant (beyond normal variance)
-    if (abs(error_1) > tolerance_1) {
-
-        integral_1 += error_1;
-        if (integral_1 > 10000) integral_1 = 10000;
-        if (integral_1 < -10000) integral_1 = -10000;
-
-        pid_1 = KP1 * error_1 + (KI1 * integral_1) / 1000 + KD1 * (error_1 - last_error_1);
-
-        static uint16_t last_target_cps_1 = 0;
-        if (target_cps_1 != last_target_cps_1) {
-            current_pwm_1 = cps_to_pwm(target_cps_1, motor1_cps_table, motor1_pwm_table, table_size);
-            integral_1 = 0;
-            last_target_cps_1 = target_cps_1;
-        }
-
-        current_pwm_1 += pid_1 / 100;
-    }
-
-    if (abs(error_2) > tolerance_2) {
-        // Update integral with windup protection
+    if (target_cps_2 > 0) {
         integral_2 += error_2;
-        if (integral_2 > 10000) integral_2 = 10000;
-        if (integral_2 < -10000) integral_2 = -10000;
+        int derivative2 = error_2 - last_error_2;
+        pid_2 = KP2 * error_2 + KI2 * integral_2 + KD2 * derivative2;
 
-        // Calculate PID output
-        pid_2 = KP2 * error_2 + (KI2 * integral_2) / 1000 + KD2 * (error_2 - last_error_2);
+        int pwm2 = current_pwm_2 + (pid_2 / 100);
 
-        // Smart PWM initialization if this is a new target
-        static uint16_t last_target_cps_2 = 0;
-        if (target_cps_2 != last_target_cps_2) {
-            // Apply synchronization factor for motor 2
-            uint16_t base_pwm = cps_to_pwm(target_cps_2, motor2_cps_table, motor2_pwm_table, table_size);
-            current_pwm_2 = (uint16_t)(base_pwm / motor_sync_factor);
-            integral_2 = 0; // Reset integral on new target
-            last_target_cps_2 = target_cps_2;
+        if (current_pwm_2 == 0 && current_cps_2 == 0) {
+            pwm2 = get_pwm_from_cps(target_cps_2, motor2_pwm_table, motor2_cps_table, table_size);
         }
 
-        // Apply PID correction to current PWM
-        current_pwm_2 += pid_2 / 100; // Scale PID output appropriately
+        if (pwm2 < 0) pwm2 = 0;
+        if (pwm2 > 1000) pwm2 = 1000;
+
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, pwm2);
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 0);
+
+        current_pwm_2 = pwm2;
+        last_error_2 = error_2;
+    } else {
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, 0);
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 0);
+        current_pwm_2 = 0;
+        integral_2 = 0;
+        last_error_2 = 0;
     }
+}
 
-    // Enforce PWM bounds (critical safety feature)
-    if (current_pwm_1 < MIN_STABLE_PWM) current_pwm_1 = MIN_STABLE_PWM;
-    if (current_pwm_1 > MAX_STABLE_PWM) current_pwm_1 = MAX_STABLE_PWM;
-    if (current_pwm_2 < MIN_STABLE_PWM) current_pwm_2 = MIN_STABLE_PWM;
-    if (current_pwm_2 > MAX_STABLE_PWM) current_pwm_2 = MAX_STABLE_PWM;
-
-    // Apply PWM to motors
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, current_pwm_1);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, current_pwm_2);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 0);
-
-    // Update history
-    last_encoder1_count = current_encoder1_count;
-    last_encoder2_count = current_encoder2_count;
-    last_error_1 = error_1;
-    last_error_2 = error_2;
+void debug_motor_status(void)
+{
+    printf("T1:%d | C1:%d | PWM1:%d | E1:%d | P1:%.2f I1:%.2f D1:%.2f | "
+           "T2:%d | C2:%d | PWM2:%d | E2:%d | P2:%.2f I2:%.2f D2:%.2f\r\n",
+           target_cps_1, current_cps_1, current_pwm_1, error_1,
+           (float)(KP1 * error_1), (float)(KI1 * integral_1), (float)(KD1 * (error_1 - last_error_1)),
+           target_cps_2, current_cps_2, current_pwm_2, error_2,
+           (float)(KP2 * error_2), (float)(KI2 * integral_2), (float)(KD2 * (error_2 - last_error_2)));
+    printf("Target1: %d | CPS1: %d | PWM1: %d\n", target_cps_1, current_cps_1, current_pwm_1);
 }
 
 void ir_calibration(void){
@@ -285,48 +308,35 @@ void ir_calibration(void){
 	}
 }
 
-
-
 void encoder_calibration(void){
     char buffer[150];
     int len = 0;
 
-    // Send calibration start signal
     len = sprintf(buffer, "CALIB_START\r\n");
     HAL_UART_Transmit(&huart1, (uint8_t *)buffer, len, HAL_MAX_DELAY);
 
-    // Test PWM values array
     uint16_t test_pwms[] = {150, 200, 250, 300, 400, 500, 600, 700, 800, 900, 1000};
     uint8_t num_tests = sizeof(test_pwms) / sizeof(test_pwms[0]);
 
     for(uint8_t i = 0; i < num_tests; i++){
         uint16_t current_pwm = test_pwms[i];
 
-        // Send PWM start signal
         len = sprintf(buffer, "PWM_START,%u\r\n", current_pwm);
         HAL_UART_Transmit(&huart1, (uint8_t *)buffer, len, HAL_MAX_DELAY);
 
-        // Set both motors PWM
-        // Motor 1: CCR1 forward, CCR2 = 0 (ground)
         __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, current_pwm);
         __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
-
-        // Motor 2: CCR4 forward, CCR3 = 0 (ground)
         __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, current_pwm);
         __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 0);
 
-        // Reset both encoder counters
-        __HAL_TIM_SET_COUNTER(&htim2, 0);  // Motor 1 encoder
-        __HAL_TIM_SET_COUNTER(&htim5, 0);  // Motor 2 encoder
-
-        // Stabilization phase (2 seconds)
-        HAL_Delay(2000);
-
-        // Reset encoders again after stabilization
         __HAL_TIM_SET_COUNTER(&htim2, 0);
         __HAL_TIM_SET_COUNTER(&htim5, 0);
 
-        // Measurement phase (3 seconds with 100ms intervals)
+        HAL_Delay(2000);
+
+        __HAL_TIM_SET_COUNTER(&htim2, 0);
+        __HAL_TIM_SET_COUNTER(&htim5, 0);
+
         for(uint8_t j = 0; j < 30; j++){
             HAL_Delay(100);
 
@@ -334,27 +344,22 @@ void encoder_calibration(void){
             uint32_t encoder2_count = __HAL_TIM_GET_COUNTER(&htim5);
             uint32_t elapsed_time_ms = (j + 1) * 100;
 
-            // Calculate counts per second for both motors
             float motor1_cps = (float)encoder1_count * 1000.0f / (float)elapsed_time_ms;
             float motor2_cps = (float)encoder2_count * 1000.0f / (float)elapsed_time_ms;
 
-            // Send data: PWM, motor1_count, motor2_count, time_ms, motor1_cps, motor2_cps
             len = sprintf(buffer, "DATA,%u,%lu,%lu,%lu,%.2f,%.2f\r\n",
                          current_pwm, encoder1_count, encoder2_count, elapsed_time_ms, motor1_cps, motor2_cps);
             HAL_UART_Transmit(&huart1, (uint8_t *)buffer, len, HAL_MAX_DELAY);
         }
 
-        // Stop both motors
         __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
         __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
         __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, 0);
         __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 0);
 
-        // Rest phase (1 second)
         HAL_Delay(1000);
     }
 
-    // Send calibration end signal
     len = sprintf(buffer, "CALIB_END\r\n");
     HAL_UART_Transmit(&huart1, (uint8_t *)buffer, len, HAL_MAX_DELAY);
 }
@@ -374,7 +379,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim)
     		main_pid_loop();
     		timer4_counter=0;
     	}
-
     }
 }
 
@@ -388,9 +392,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 
         if(current_sensor_index >= NUM_SENSORS)
         {
-
             current_sensor_index = 0;
-
             adc_buffer_write_ptr_index ^= 1;
             adc_buffer_read_ptr_index ^= 1;
         }
@@ -464,6 +466,7 @@ int main(void)
   MX_USART1_UART_Init();
   MX_TIM4_Init();
   MX_TIM9_Init();
+
   /* USER CODE BEGIN 2 */
 
   HAL_TIM_Base_Start_IT(&htim3);
@@ -480,10 +483,12 @@ int main(void)
   HAL_GPIO_WritePin(STBY_GPIO_Port, STBY_Pin, GPIO_PIN_SET);
   setMuxChannel(0);
 
-
-  HAL_Delay(5000);
-  target_cps_1=7000;
-  target_cps_2=7000;
+  // Initialize timing and set targets
+  HAL_Delay(1000);  // Reduced delay
+  last_pid_time = HAL_GetTick();  // Initialize timing
+  target_cps_1 = 7000;
+  target_cps_2 = 7000;
+  motors_initialized = 0;  // Force initialization
 
   /* USER CODE END 2 */
 
@@ -492,16 +497,31 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-
     /* USER CODE BEGIN 3 */
+    // Debug output every 500ms
+    while (1)
+    {
+        // Run PID loop every 100ms
+        if (HAL_GetTick() - last_pid_time >= 100) {
+            motor_pid_loop();
+            last_pid_time = HAL_GetTick();
+        }
+
+        // Debug output every 500ms
+        debug_counter++;
+        if (debug_counter >= 500) {
+            debug_motor_status();
+            debug_counter = 0;
+        }
+        HAL_Delay(1);
+    }
+
+    /* USER CODE END 3 */
   }
   /* USER CODE END 3 */
 }
 
-/**
-  * @brief System Clock Configuration
-  * @retval None
-  */
+
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
@@ -1049,4 +1069,12 @@ void assert_failed(uint8_t *file, uint32_t line)
      ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
 }
+/* USER CODE BEGIN 4 */
+// your other helper functions
+/* USER CODE END 4 */
+
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
+
 #endif /* USE_FULL_ASSERT */
