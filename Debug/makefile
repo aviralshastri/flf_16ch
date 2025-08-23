@@ -60,8 +60,8 @@ all: main-build
 main-build: flf_16ch.elf secondary-outputs
 
 # Tool invocations
-flf_16ch.elf flf_16ch.map: $(OBJS) $(USER_OBJS) D:\stm32_common_ws\flf_16ch\STM32F411CEUX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "flf_16ch.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"D:\stm32_common_ws\flf_16ch\STM32F411CEUX_FLASH.ld" --specs=nosys.specs -Wl,-Map="flf_16ch.map" -Wl,--gc-sections -static -u _printf_float -u _scanf_float --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+flf_16ch.elf flf_16ch.map: $(OBJS) $(USER_OBJS) E:\flf\flf_16ch\STM32F411CEUX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "flf_16ch.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"E:\flf\flf_16ch\STM32F411CEUX_FLASH.ld" --specs=nosys.specs -Wl,-Map="flf_16ch.map" -Wl,--gc-sections -static -u _printf_float -u _scanf_float --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 

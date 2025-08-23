@@ -57,60 +57,26 @@ DMA_HandleTypeDef hdma_usart1_rx;
 
 /* USER CODE BEGIN PV */
 
-// Motor calibration data - add after existing PID variables
-// PWM-to-CPS lookup tables (from your calibration data)
-static const uint16_t motor1_pwm_table[] = {400, 500, 600, 700, 800, 900, 1000};
-static const uint16_t motor1_cps_table[] = {6563, 7129, 7491, 7751, 7951, 8104, 8345};
-static const uint16_t motor2_pwm_table[] = {400, 500, 600, 700, 800, 900, 1000};
-static const uint16_t motor2_cps_table[] = {6194, 6893, 7307, 7608, 7839, 8004, 8279};
-static const uint8_t table_size = 7;
-
-// Motor synchronization factor
-static const float motor_sync_factor = 1.0247f;
-
-// PWM bounds from calibration
-#define MIN_STABLE_PWM 400
-#define MAX_STABLE_PWM 1000
-#define MIN_STABLE_CPS_M1 6563
-#define MAX_STABLE_CPS_M1 8345
-#define MIN_STABLE_CPS_M2 6194
-#define MAX_STABLE_CPS_M2 8279
-
-// Confidence interval (6% from your CV data)
-#define CPS_TOLERANCE_PERCENT 6
-
-// Current PWM values for each motor
-volatile uint16_t current_pwm_1 = 0;
-volatile uint16_t current_pwm_2 = 0;
-
-// Integral accumulator for PID
-volatile long integral_1 = 0;
-volatile long integral_2 = 0;
-
 #define NUM_SENSORS 16
-#define CALIB_SAMPLES_PER_SENSOR 50
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
-int KP1 = 10, KP2 = 8;   // Start lower
-int KI1 = 2, KI2 = 2;    // Start very low
-int KD1 = 5, KD2 = 5;    // Moderate damping
 
-volatile int current_encoder1_count=0;
-volatile int current_encoder2_count=0;
-volatile int last_encoder1_count=0;
-volatile int last_encoder2_count=0;
-volatile int current_cps_1=0;
-volatile int current_cps_2=0;
-volatile int target_cps_1=0;
-volatile int target_cps_2=0;
-volatile int error_1=0;
-volatile int error_2=0;
-volatile int last_error_1=0;
-volatile int last_error_2=0;
-volatile int pid_1=0;
-volatile int pid_2=0;
+#define THRESHOLD 2500          // Hardcoded threshold value - adjust as needed
+#define BASE_SPEED 400         // Base PWM value for motors (0-999)
+#define MAX_SPEED 800          // Maximum PWM value
+#define MIN_SPEED 100          // Minimum PWM value
 
+// PID Constants - tune these values
+#define KP 0.8f                // Proportional gain
+#define KI 0.0f                // Integral gain
+#define KD 0.15f               // Derivative gain
+
+// Integral accumulator for PID - MOVE THIS LINE HERE
+volatile float integral = 0.0f;
+volatile float last_error = 0.0f;
+volatile int16_t current_position = 0;
+volatile uint8_t line_detected = 0;
 
 volatile uint16_t adc_buffers[2][NUM_SENSORS] = {0};
 volatile uint16_t *adc_buffer_ptrs[2] = {
@@ -121,8 +87,8 @@ volatile uint8_t adc_buffer_write_ptr_index = 0;
 volatile uint8_t adc_buffer_read_ptr_index = 1;
 volatile uint8_t current_sensor_index = 0;
 volatile uint16_t adc_dma_single_value;
-static uint16_t thresholds[NUM_SENSORS]={0};
-volatile uint16_t timer4_counter=0;
+const int8_t sensor_weights[16] = {-7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 0};
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -144,25 +110,6 @@ static void MX_TIM9_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-uint16_t cps_to_pwm(uint16_t target_cps, const uint16_t *cps_table, const uint16_t *pwm_table, uint8_t table_len) {
-    if (target_cps <= cps_table[0]) return pwm_table[0];
-    if (target_cps >= cps_table[table_len-1]) return pwm_table[table_len-1];
-
-    for (uint8_t i = 0; i < table_len - 1; i++) {
-        if (target_cps >= cps_table[i] && target_cps <= cps_table[i+1]) {
-            float ratio = (float)(target_cps - cps_table[i]) / (float)(cps_table[i+1] - cps_table[i]);
-            return pwm_table[i] + (uint16_t)(ratio * (pwm_table[i+1] - pwm_table[i]));
-        }
-    }
-    return pwm_table[0];
-}
-
-
-uint8_t validate_target_cps(uint16_t target_cps_1, uint16_t target_cps_2) {
-    if (target_cps_1 < MIN_STABLE_CPS_M1 || target_cps_1 > MAX_STABLE_CPS_M1) return 0;
-    if (target_cps_2 < MIN_STABLE_CPS_M2 || target_cps_2 > MAX_STABLE_CPS_M2) return 0;
-    return 1;
-}
 
 void setMuxChannel(uint8_t ch)
 {
@@ -174,190 +121,124 @@ void setMuxChannel(uint8_t ch)
     HAL_GPIO_WritePin(GPIOB, S3_Pin, (ch & 0x08) ? GPIO_PIN_SET : GPIO_PIN_RESET);
 }
 
-void main_pid_loop(void){
+int16_t calculate_line_position(void) {
+    uint32_t weighted_sum = 0;
+    uint32_t total_weight = 0;
+    uint8_t sensors_on_line = 0;
 
-}
+    // Read from the stable buffer
+    volatile uint16_t *sensor_data = adc_buffer_ptrs[adc_buffer_read_ptr_index];
 
-
-void motor_pid_loop(void)
-{
-    // Read encoder counts
-    current_encoder1_count = __HAL_TIM_GET_COUNTER(&htim2);
-    current_encoder2_count = __HAL_TIM_GET_COUNTER(&htim5);
-
-    // Calculate current CPS
-    current_cps_1 = (current_encoder1_count - last_encoder1_count) * 1000;
-    current_cps_2 = (current_encoder2_count - last_encoder2_count) * 1000;
-
-    // Validate target CPS is within stable range
-    if (!validate_target_cps(target_cps_1, target_cps_2)) {
-        // Clamp targets to stable range
-        if (target_cps_1 < MIN_STABLE_CPS_M1) target_cps_1 = MIN_STABLE_CPS_M1;
-        if (target_cps_1 > MAX_STABLE_CPS_M1) target_cps_1 = MAX_STABLE_CPS_M1;
-        if (target_cps_2 < MIN_STABLE_CPS_M2) target_cps_2 = MIN_STABLE_CPS_M2;
-        if (target_cps_2 > MAX_STABLE_CPS_M2) target_cps_2 = MAX_STABLE_CPS_M2;
-    }
-
-    // Calculate errors
-    error_1 = target_cps_1 - current_cps_1;
-    error_2 = target_cps_2 - current_cps_2;
-
-    // Check if within tolerance (steady-state detection)
-    uint16_t tolerance_1 = (target_cps_1 * CPS_TOLERANCE_PERCENT) / 100;
-    uint16_t tolerance_2 = (target_cps_2 * CPS_TOLERANCE_PERCENT) / 100;
-
-    // Only apply PID if error is significant (beyond normal variance)
-    if (abs(error_1) > tolerance_1) {
-
-        integral_1 += error_1;
-        if (integral_1 > 10000) integral_1 = 10000;
-        if (integral_1 < -10000) integral_1 = -10000;
-
-        pid_1 = KP1 * error_1 + (KI1 * integral_1) / 1000 + KD1 * (error_1 - last_error_1);
-
-        static uint16_t last_target_cps_1 = 0;
-        if (target_cps_1 != last_target_cps_1) {
-            current_pwm_1 = cps_to_pwm(target_cps_1, motor1_cps_table, motor1_pwm_table, table_size);
-            integral_1 = 0;
-            last_target_cps_1 = target_cps_1;
+    for(int i = 0; i < NUM_SENSORS; i++) {
+        // Check if sensor detects line (value below threshold means white/line)
+        if(sensor_data[i] < THRESHOLD) {
+            weighted_sum += (uint32_t)(sensor_weights[i] * 1000); // Scale up for precision
+            total_weight += 1000;
+            sensors_on_line++;
         }
-
-        current_pwm_1 += pid_1 / 100;
     }
 
-    if (abs(error_2) > tolerance_2) {
-        // Update integral with windup protection
-        integral_2 += error_2;
-        if (integral_2 > 10000) integral_2 = 10000;
-        if (integral_2 < -10000) integral_2 = -10000;
-
-        // Calculate PID output
-        pid_2 = KP2 * error_2 + (KI2 * integral_2) / 1000 + KD2 * (error_2 - last_error_2);
-
-        // Smart PWM initialization if this is a new target
-        static uint16_t last_target_cps_2 = 0;
-        if (target_cps_2 != last_target_cps_2) {
-            // Apply synchronization factor for motor 2
-            uint16_t base_pwm = cps_to_pwm(target_cps_2, motor2_cps_table, motor2_pwm_table, table_size);
-            current_pwm_2 = (uint16_t)(base_pwm / motor_sync_factor);
-            integral_2 = 0; // Reset integral on new target
-            last_target_cps_2 = target_cps_2;
-        }
-
-        // Apply PID correction to current PWM
-        current_pwm_2 += pid_2 / 100; // Scale PID output appropriately
+    if(sensors_on_line > 0) {
+        line_detected = 1;
+        return (int16_t)(weighted_sum / total_weight); // Returns scaled position
+    } else {
+        line_detected = 0;
+        return current_position; // Return last known position
     }
-
-    // Enforce PWM bounds (critical safety feature)
-    if (current_pwm_1 < MIN_STABLE_PWM) current_pwm_1 = MIN_STABLE_PWM;
-    if (current_pwm_1 > MAX_STABLE_PWM) current_pwm_1 = MAX_STABLE_PWM;
-    if (current_pwm_2 < MIN_STABLE_PWM) current_pwm_2 = MIN_STABLE_PWM;
-    if (current_pwm_2 > MAX_STABLE_PWM) current_pwm_2 = MAX_STABLE_PWM;
-
-    // Apply PWM to motors
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, current_pwm_1);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, current_pwm_2);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 0);
-
-    // Update history
-    last_encoder1_count = current_encoder1_count;
-    last_encoder2_count = current_encoder2_count;
-    last_error_1 = error_1;
-    last_error_2 = error_2;
 }
 
-void ir_calibration(void){
-	uint16_t current_val=0;
-	memset(thresholds, 0, sizeof(NUM_SENSORS));
+/**
+ * Set motor speeds and directions
+ * speed1, speed2: -999 to +999 (negative = reverse, positive = forward)
+ */
+void set_motor_speeds(int16_t speed1, int16_t speed2) {
+    uint16_t pwm1, pwm2;
 
-	for (int i=0;i<NUM_SENSORS;i++){
-		uint16_t current_max=0;
-		uint16_t current_min=4095;
-		for (int j=0;j<CALIB_SAMPLES_PER_SENSOR;j++){
-			current_val=adc_buffers[adc_buffer_read_ptr_index][i];
-			current_max=MAX(current_max,current_val);
-			current_min=MIN(current_min,current_val);
-			HAL_Delay(10);
-		}
-		thresholds[i]=(current_max+current_min)/2;
-		HAL_Delay(10);
-	}
-}
-
-
-
-void encoder_calibration(void){
-    char buffer[150];
-    int len = 0;
-
-    // Send calibration start signal
-    len = sprintf(buffer, "CALIB_START\r\n");
-    HAL_UART_Transmit(&huart1, (uint8_t *)buffer, len, HAL_MAX_DELAY);
-
-    // Test PWM values array
-    uint16_t test_pwms[] = {150, 200, 250, 300, 400, 500, 600, 700, 800, 900, 1000};
-    uint8_t num_tests = sizeof(test_pwms) / sizeof(test_pwms[0]);
-
-    for(uint8_t i = 0; i < num_tests; i++){
-        uint16_t current_pwm = test_pwms[i];
-
-        // Send PWM start signal
-        len = sprintf(buffer, "PWM_START,%u\r\n", current_pwm);
-        HAL_UART_Transmit(&huart1, (uint8_t *)buffer, len, HAL_MAX_DELAY);
-
-        // Set both motors PWM
-        // Motor 1: CCR1 forward, CCR2 = 0 (ground)
-        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, current_pwm);
+    // Motor 1 control
+    if(speed1 >= 0) {
+        // Forward direction - CH1 = PWM, CH2 = 0
+        pwm1 = (uint16_t)MIN(speed1, 999);
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, pwm1);
         __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
-
-        // Motor 2: CCR4 forward, CCR3 = 0 (ground)
-        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, current_pwm);
-        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 0);
-
-        // Reset both encoder counters
-        __HAL_TIM_SET_COUNTER(&htim2, 0);  // Motor 1 encoder
-        __HAL_TIM_SET_COUNTER(&htim5, 0);  // Motor 2 encoder
-
-        // Stabilization phase (2 seconds)
-        HAL_Delay(2000);
-
-        // Reset encoders again after stabilization
-        __HAL_TIM_SET_COUNTER(&htim2, 0);
-        __HAL_TIM_SET_COUNTER(&htim5, 0);
-
-        // Measurement phase (3 seconds with 100ms intervals)
-        for(uint8_t j = 0; j < 30; j++){
-            HAL_Delay(100);
-
-            uint32_t encoder1_count = __HAL_TIM_GET_COUNTER(&htim2);
-            uint32_t encoder2_count = __HAL_TIM_GET_COUNTER(&htim5);
-            uint32_t elapsed_time_ms = (j + 1) * 100;
-
-            // Calculate counts per second for both motors
-            float motor1_cps = (float)encoder1_count * 1000.0f / (float)elapsed_time_ms;
-            float motor2_cps = (float)encoder2_count * 1000.0f / (float)elapsed_time_ms;
-
-            // Send data: PWM, motor1_count, motor2_count, time_ms, motor1_cps, motor2_cps
-            len = sprintf(buffer, "DATA,%u,%lu,%lu,%lu,%.2f,%.2f\r\n",
-                         current_pwm, encoder1_count, encoder2_count, elapsed_time_ms, motor1_cps, motor2_cps);
-            HAL_UART_Transmit(&huart1, (uint8_t *)buffer, len, HAL_MAX_DELAY);
-        }
-
-        // Stop both motors
+    } else {
+        // Reverse direction - CH1 = 0, CH2 = PWM
+        pwm1 = (uint16_t)MIN(-speed1, 999);
         __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
-        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
-        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, 0);
-        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 0);
-
-        // Rest phase (1 second)
-        HAL_Delay(1000);
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, pwm1);
     }
 
-    // Send calibration end signal
-    len = sprintf(buffer, "CALIB_END\r\n");
-    HAL_UART_Transmit(&huart1, (uint8_t *)buffer, len, HAL_MAX_DELAY);
+    // Motor 2 control
+    if(speed2 >= 0) {
+        // Forward direction - CH3 = PWM, CH4 = 0
+        pwm2 = (uint16_t)MIN(speed2, 999);
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, pwm2);
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 0);
+    } else {
+        // Reverse direction - CH3 = 0, CH4 = PWM
+        pwm2 = (uint16_t)MIN(-speed2, 999);
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, 0);
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, pwm2);
+    }
 }
+
+// REPLACE the empty main_pid_loop function with this:
+void main_pid_loop(void) {
+    static uint32_t last_pid_time = 0;
+    uint32_t current_time = HAL_GetTick();
+    float dt = (current_time - last_pid_time) / 1000.0f; // Convert to seconds
+
+    if(dt < 0.001f) return; // Avoid too frequent calls
+    last_pid_time = current_time;
+
+    // Get current line position
+    current_position = calculate_line_position();
+
+    // Calculate error (0 means centered, negative = left of center, positive = right of center)
+    float error = (float)current_position;
+
+    // PID calculations
+    float proportional = KP * error;
+
+    integral += error * dt;
+    // Limit integral wind-up
+    if(integral > 1000.0f) integral = 1000.0f;
+    if(integral < -1000.0f) integral = -1000.0f;
+    float integral_term = KI * integral;
+
+    float derivative = KD * (error - last_error) / dt;
+    last_error = error;
+
+    // Calculate PID output
+    float pid_output = proportional + integral_term + derivative;
+
+    // Calculate motor speeds
+    int16_t left_speed, right_speed;
+
+    if(!line_detected) {
+        // Line lost - implement search behavior
+        if(current_position > 0) {
+            // Last seen on right, turn right to search
+            left_speed = BASE_SPEED / 2;
+            right_speed = -BASE_SPEED / 2;
+        } else {
+            // Last seen on left, turn left to search
+            left_speed = -BASE_SPEED / 2;
+            right_speed = BASE_SPEED / 2;
+        }
+    } else {
+        // Normal line following
+        left_speed = BASE_SPEED - (int16_t)pid_output;
+        right_speed = BASE_SPEED + (int16_t)pid_output;
+
+        // Limit speeds
+        left_speed = MAX(MIN_SPEED, MIN(left_speed, MAX_SPEED));
+        right_speed = MAX(MIN_SPEED, MIN(right_speed, MAX_SPEED));
+    }
+
+    // Set motor speeds
+    set_motor_speeds(left_speed, right_speed);
+}
+
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim)
 {
@@ -367,14 +248,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim)
     }
     else if(htim->Instance == TIM4)
     {
-    	motor_pid_loop();
-    	timer4_counter++;
-
-    	if (timer4_counter>=2){
-    		main_pid_loop();
-    		timer4_counter=0;
-    	}
-
+    	main_pid_loop();
     }
 }
 
@@ -399,30 +273,6 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
     }
 }
 
-void SendIRDataUART1(void)
-{
-    char buffer[512];
-    int len = 0;
-
-    for (int i = 0; i < NUM_SENSORS; i++)
-    {
-        len += sprintf(&buffer[len], "%u", adc_buffer_ptrs[adc_buffer_read_ptr_index][i]);
-
-        if (i < NUM_SENSORS - 1)
-        {
-            len += sprintf(&buffer[len], ",");
-        }
-    }
-
-    len += sprintf(&buffer[len], "\r\n");
-
-    uint32_t encoder_tim2 = __HAL_TIM_GET_COUNTER(&htim2);
-    uint32_t encoder_tim5 = __HAL_TIM_GET_COUNTER(&htim5);
-
-    len += sprintf(&buffer[len], "%lu,%lu\r\n", encoder_tim2, encoder_tim5);
-
-    HAL_UART_Transmit(&huart1, (uint8_t *)buffer, len, HAL_MAX_DELAY);
-}
 
 /* USER CODE END 0 */
 
@@ -468,7 +318,6 @@ int main(void)
 
   HAL_TIM_Base_Start_IT(&htim3);
   HAL_TIM_Base_Start_IT(&htim4);
-  HAL_TIM_Base_Start_IT(&htim9);
   HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
   HAL_TIM_Encoder_Start(&htim5, TIM_CHANNEL_ALL);
   __HAL_TIM_SET_COUNTER(&htim2, 0);
@@ -479,11 +328,6 @@ int main(void)
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
   HAL_GPIO_WritePin(STBY_GPIO_Port, STBY_Pin, GPIO_PIN_SET);
   setMuxChannel(0);
-
-
-  HAL_Delay(5000);
-  target_cps_1=7000;
-  target_cps_2=7000;
 
   /* USER CODE END 2 */
 
@@ -797,7 +641,7 @@ static void MX_TIM4_Init(void)
   htim4.Instance = TIM4;
   htim4.Init.Prescaler = 100-1;
   htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim4.Init.Period = 1000-1;
+  htim4.Init.Period = 2000-1;
   htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim4) != HAL_OK)
@@ -938,7 +782,7 @@ static void MX_USART1_UART_Init(void)
 
   /* USER CODE END USART1_Init 1 */
   huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
+  huart1.Init.BaudRate = 460800;
   huart1.Init.WordLength = UART_WORDLENGTH_8B;
   huart1.Init.StopBits = UART_STOPBITS_1;
   huart1.Init.Parity = UART_PARITY_NONE;
