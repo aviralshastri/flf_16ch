@@ -230,17 +230,9 @@ void main_pid_loop(void) {
 }
 
 void send_ir_data(void){
-    char buffer[256];
-    volatile uint16_t *sensor_data = adc_buffer_ptrs[adc_buffer_read_ptr_index];
-
-    snprintf(buffer, sizeof(buffer),
-             "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\r\n",
-             sensor_data[0], sensor_data[1], sensor_data[2], sensor_data[3],
-             sensor_data[4], sensor_data[5], sensor_data[6], sensor_data[7],
-             sensor_data[8], sensor_data[9], sensor_data[10], sensor_data[11],
-             sensor_data[12], sensor_data[13], sensor_data[14], sensor_data[15]);
-
-    HAL_UART_Transmit(&huart1, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
+	char buffer1[256];
+	  snprintf(buffer1, sizeof(buffer1),"test_startup\r\n");
+	  HAL_UART_Transmit(&huart1, (uint8_t*)buffer1, strlen(buffer1), HAL_MAX_DELAY);
 }
 
 void calibrate(void){
@@ -418,9 +410,7 @@ int main(void)
 
   HAL_Delay(5000);
 
-  char buffer1[256];
-  snprintf(buffer1, sizeof(buffer1),"test_startup\r\n");
-  HAL_UART_Transmit(&huart1, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
+
 
   /* USER CODE END 2 */
 
