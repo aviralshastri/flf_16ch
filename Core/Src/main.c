@@ -187,6 +187,7 @@ void set_motor_speeds(int16_t speed1, int16_t speed2) {
 
 void main_pid_loop(void) {
 	if (is_calibrating || !is_running)
+		set_motor_speeds(0,0);
 		return;
 
 	int16_t left_speed, right_speed;
@@ -225,10 +226,7 @@ void main_pid_loop(void) {
         right_speed = MAX(MIN_SPEED, MIN(right_speed, MAX_SPEED));
     }
 
-    if (is_running)
-    	set_motor_speeds(left_speed, right_speed);
-    else
-    	set_motor_speeds(0,0);
+    set_motor_speeds(left_speed, right_speed);
 
 }
 
@@ -260,7 +258,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim)
 
 void calibrate(void){
 	is_running=0;
-	if (!is_calibrating || is_running)
+	if (!is_calibrating)
 		return;
 
 	set_motor_speeds(600,-600);
