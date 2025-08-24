@@ -59,14 +59,13 @@ UART_HandleTypeDef huart1;
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
-#define BASE_SPEED 400         // Base PWM value for motors (0-999)
+#define BASE_SPEED 500         // Base PWM value
 #define MAX_SPEED 800          // Maximum PWM value
 #define MIN_SPEED 300          // Minimum PWM value
 
-// PID Constants - tune these values
-#define KP 0.8f                // Proportional gain
-#define KI 0.0f                // Integral gain
-#define KD 0.15f               // Derivative gain
+#define KP 1.2f
+#define KI 0.05f
+#define KD 0.25f
 
 volatile float integral = 0.0f;
 volatile float last_error = 0.0f;
@@ -83,7 +82,7 @@ volatile uint8_t adc_buffer_read_ptr_index = 1;
 volatile uint8_t current_sensor_index = 0;
 volatile uint16_t adc_dma_single_value;
 const int8_t sensor_weights[16] = {-7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 0};
-volatile uint16_t sensor_thresholds[16]= {2500,2500,2500,2500,2500,2500,2500,2500,2500,2500,2500,2500,2500,2500,2500,2500};
+volatile uint16_t sensor_thresholds[16]= {0};
 const float dt = 0.002f;
 
 volatile uint8_t is_calibrating=0;
@@ -184,11 +183,11 @@ void set_motor_speeds(int16_t speed1, int16_t speed2) {
     }
 }
 
-
 void main_pid_loop(void) {
-	if (is_calibrating || !is_running)
+	if (is_calibrating || !is_running){
 		set_motor_speeds(0,0);
 		return;
+	}
 
 	int16_t left_speed, right_speed;
 
@@ -244,24 +243,13 @@ void send_ir_data(void){
     HAL_UART_Transmit(&huart1, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
 }
 
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim)
-{
-    if(htim->Instance == TIM3)
-    {
-        HAL_ADC_Start_DMA(&hadc1, (uint32_t*)&adc_dma_single_value, 1);
-    }
-    else if(htim->Instance == TIM4)
-    {
-    	main_pid_loop();
-    }
-}
-
 void calibrate(void){
 	is_running=0;
 	if (!is_calibrating)
 		return;
 
 	set_motor_speeds(600,-600);
+	HAL_Delay(100);
 
 	for (int i=0;i<NUM_SENSORS;i++){
 		uint16_t current_min=4095;
@@ -278,6 +266,53 @@ void calibrate(void){
 	set_motor_speeds(0,0);
 
 	is_calibrating=0;
+}
+
+void reset_pid_variables(void) {
+    integral = 0.0f;
+    last_error = 0.0f;
+    current_position = 0;
+    line_detected = 0;
+}
+
+void init_all_variables(void) {
+    integral = 0.0f;
+    last_error = 0.0f;
+    current_position = 0;
+    line_detected = 0;
+
+    is_calibrating = 0;
+    is_running = 0;
+
+    adc_buffer_write_ptr_index = 0;
+    adc_buffer_read_ptr_index = 1;
+    current_sensor_index = 0;
+    adc_dma_single_value = 0;
+
+    for(int i = 0; i < 2; i++) {
+        for(int j = 0; j < NUM_SENSORS; j++) {
+            adc_buffers[i][j] = 0;
+        }
+    }
+
+    for(int i = 0; i < NUM_SENSORS; i++) {
+        sensor_thresholds[i] = 2500;
+    }
+
+    adc_buffer_ptrs[0] = adc_buffers[0];
+    adc_buffer_ptrs[1] = adc_buffers[1];
+}
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim)
+{
+    if(htim->Instance == TIM3)
+    {
+        HAL_ADC_Start_DMA(&hadc1, (uint32_t*)&adc_dma_single_value, 1);
+    }
+    else if(htim->Instance == TIM4)
+    {
+    	main_pid_loop();
+    }
 }
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
@@ -309,14 +344,15 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     	HAL_Delay(50);
     	is_calibrating=0;
     	HAL_GPIO_TogglePin(STBY_GPIO_Port, STBY_Pin);
+    	reset_pid_variables();
     	is_running=1;
     }
     else if(GPIO_Pin == BUTTON2_Pin)
     {
     	HAL_Delay(50);
     	set_motor_speeds(0,0);
-    	is_calibrating=1;
     	is_running=0;
+    	is_calibrating=1;
     	HAL_GPIO_WritePin(STBY_GPIO_Port, STBY_Pin,GPIO_PIN_SET);
     	calibrate();
     	set_motor_speeds(0,0);
@@ -340,6 +376,8 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+	init_all_variables();
+	setMuxChannel(0);
 
   /* USER CODE END 1 */
 
@@ -349,6 +387,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
+
 
   /* USER CODE END Init */
 
@@ -376,7 +415,6 @@ int main(void)
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
-  setMuxChannel(0);
 
   /* USER CODE END 2 */
 
