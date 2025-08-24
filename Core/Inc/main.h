@@ -59,14 +59,17 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define ENCODERB1_Pin GPIO_PIN_0
-#define ENCODERB1_GPIO_Port GPIOA
-#define ENCODERB2_Pin GPIO_PIN_1
-#define ENCODERB2_GPIO_Port GPIOA
+#define BUTTON1_Pin GPIO_PIN_13
+#define BUTTON1_GPIO_Port GPIOC
+#define BUTTON1_EXTI_IRQn EXTI15_10_IRQn
+#define BUTTON2_Pin GPIO_PIN_14
+#define BUTTON2_GPIO_Port GPIOC
+#define BUTTON2_EXTI_IRQn EXTI15_10_IRQn
+#define BUTTON3_Pin GPIO_PIN_15
+#define BUTTON3_GPIO_Port GPIOC
+#define BUTTON3_EXTI_IRQn EXTI15_10_IRQn
 #define ESC_Pin GPIO_PIN_2
 #define ESC_GPIO_Port GPIOA
-#define ENCODERA1_Pin GPIO_PIN_5
-#define ENCODERA1_GPIO_Port GPIOA
 #define OUT_Pin GPIO_PIN_7
 #define OUT_GPIO_Port GPIOA
 #define S3_Pin GPIO_PIN_0
@@ -87,8 +90,6 @@ void Error_Handler(void);
 #define INB2_GPIO_Port GPIOA
 #define STBY_Pin GPIO_PIN_12
 #define STBY_GPIO_Port GPIOA
-#define ENCODERA2_Pin GPIO_PIN_3
-#define ENCODERA2_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 
