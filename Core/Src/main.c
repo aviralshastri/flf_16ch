@@ -230,9 +230,17 @@ void main_pid_loop(void) {
 }
 
 void send_ir_data(void){
-	char buffer1[256];
-	  snprintf(buffer1, sizeof(buffer1),"test_startup\r\n");
-	  HAL_UART_Transmit(&huart1, (uint8_t*)buffer1, strlen(buffer1), HAL_MAX_DELAY);
+    char buffer[256];
+    volatile uint16_t *sensor_data = adc_buffer_ptrs[adc_buffer_read_ptr_index];
+
+    snprintf(buffer, sizeof(buffer),
+             "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\r\n",
+             sensor_data[0], sensor_data[1], sensor_data[2], sensor_data[3],
+             sensor_data[4], sensor_data[5], sensor_data[6], sensor_data[7],
+             sensor_data[8], sensor_data[9], sensor_data[10], sensor_data[11],
+             sensor_data[12], sensor_data[13], sensor_data[14], sensor_data[15]);
+
+    HAL_UART_Transmit(&huart1, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
 }
 
 void calibrate(void){
@@ -819,13 +827,23 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, S3_Pin|S2_Pin|S1_Pin|S0_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(STBY_GPIO_Port, STBY_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : BUTTON1_Pin BUTTON2_Pin BUTTON3_Pin */
-  GPIO_InitStruct.Pin = BUTTON1_Pin|BUTTON2_Pin|BUTTON3_Pin;
+  /*Configure GPIO pin : LED_Pin */
+  GPIO_InitStruct.Pin = LED_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(LED_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : BUTTON2_Pin BUTTON3_Pin */
+  GPIO_InitStruct.Pin = BUTTON2_Pin|BUTTON3_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
@@ -843,6 +861,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(STBY_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : BUTTON1_Pin */
+  GPIO_InitStruct.Pin = BUTTON1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(BUTTON1_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
