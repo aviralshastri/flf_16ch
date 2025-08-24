@@ -416,6 +416,12 @@ int main(void)
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
 
+  HAL_Delay(5000);
+
+  char buffer1[256];
+  snprintf(buffer1, sizeof(buffer1),"test_startup\r\n");
+  HAL_UART_Transmit(&huart1, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
