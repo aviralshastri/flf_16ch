@@ -63,9 +63,9 @@ UART_HandleTypeDef huart1;
 #define MAX_SPEED 900          // Maximum PWM value
 #define MIN_SPEED 300          // Minimum PWM value
 
-#define KP 5.5f
+#define KP 10.0f
 #define KI 0.0f
-#define KD 20.0f
+#define KD 0.0f
 
 volatile float integral = 0.0f;
 volatile float last_error = 0.0f;
@@ -81,7 +81,7 @@ volatile uint8_t adc_buffer_write_ptr_index = 0;
 volatile uint8_t adc_buffer_read_ptr_index = 1;
 volatile uint8_t current_sensor_index = 0;
 volatile uint16_t adc_dma_single_value;
-const int8_t sensor_weights[16] = {-7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 0};
+const int8_t sensor_weights[16] = {-49, -36, -25, -16, -9, -4, -1, 0, 1, 4, 9, 16, 25, 36, 49,0};
 volatile uint16_t sensor_thresholds[16]= {0};
 const float dt = 0.002f;
 
@@ -232,26 +232,18 @@ void setMuxChannel(uint8_t ch)
 
 int16_t calculate_line_position(void) {
     uint32_t weighted_sum = 0;
-    uint32_t total_weight = 0;
     uint8_t sensors_on_line = 0;
 
     volatile uint16_t *sensor_data = adc_buffer_ptrs[adc_buffer_read_ptr_index];
 
     for(int i = 0; i < NUM_SENSORS; i++) {
-        if(sensor_data[i] < sensor_thresholds[i]) {
-            weighted_sum += (uint32_t)(sensor_weights[i] * 1000);
-            total_weight += 1000;
-            sensors_on_line++;
+        if(sensor_data[i] > sensor_thresholds[i]) {
+        	weighted_sum+=sensor_weights[i];
+        	sensors_on_line++;
         }
     }
 
-    if(sensors_on_line > 0) {
-        line_detected = 1;
-        return (int16_t)(weighted_sum / total_weight);
-    } else {
-        line_detected = 0;
-        return current_position;
-    }
+    return weighted_sum/sensors_on_line;
 }
 
 
@@ -288,6 +280,13 @@ void main_pid_loop(void) {
 	int16_t left_speed, right_speed;
 
     current_position = calculate_line_position();
+
+    if (current_position==0){
+    	line_detected=0;
+    }
+    else{
+    	line_detected=1;
+    }
 
     float error = (float)current_position;
 

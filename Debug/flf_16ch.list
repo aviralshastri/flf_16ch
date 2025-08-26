@@ -2048,7 +2048,7 @@ void main_pid_loop(void) {
 
     float proportional = KP * error;
  800152c:	edd7 7a04 	vldr	s15, [r7, #16]
- 8001530:	eeb1 7a06 	vmov.f32	s14, #22	@ 0x40b00000  5.5
+ 8001530:	eeb2 7a04 	vmov.f32	s14, #36	@ 0x41200000  10.0
  8001534:	ee67 7a87 	vmul.f32	s15, s15, s14
  8001538:	edc7 7a03 	vstr	s15, [r7, #12]
 
@@ -2094,7 +2094,7 @@ void main_pid_loop(void) {
  80015a0:	edd3 7a00 	vldr	s15, [r3]
  80015a4:	ed97 7a04 	vldr	s14, [r7, #16]
  80015a8:	ee77 7a67 	vsub.f32	s15, s14, s15
- 80015ac:	eeb3 7a04 	vmov.f32	s14, #52	@ 0x41a00000  20.0
+ 80015ac:	ed9f 7a43 	vldr	s14, [pc, #268]	@ 80016bc <main_pid_loop+0x1c8>
  80015b0:	ee27 7a87 	vmul.f32	s14, s15, s14
  80015b4:	eddf 6a3b 	vldr	s13, [pc, #236]	@ 80016a4 <main_pid_loop+0x1b0>
  80015b8:	eec7 7a26 	vdiv.f32	s15, s14, s13
