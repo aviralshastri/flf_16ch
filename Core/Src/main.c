@@ -60,12 +60,12 @@ UART_HandleTypeDef huart1;
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
 #define BASE_SPEED 500         // Base PWM value
-#define MAX_SPEED 800          // Maximum PWM value
+#define MAX_SPEED 900          // Maximum PWM value
 #define MIN_SPEED 300          // Minimum PWM value
 
-#define KP 1.2f
-#define KI 0.05f
-#define KD 0.25f
+#define KP 5.5f
+#define KI 0.0f
+#define KD 20.0f
 
 volatile float integral = 0.0f;
 volatile float last_error = 0.0f;
@@ -85,7 +85,6 @@ const int8_t sensor_weights[16] = {-7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5,
 volatile uint16_t sensor_thresholds[16]= {0};
 const float dt = 0.002f;
 
-volatile uint8_t is_calibrating=0;
 volatile uint8_t is_running=0;
 
 /* USER CODE END PV */
@@ -112,26 +111,123 @@ void setMuxChannel(uint8_t ch)
 {
     if(ch >= 16) return;
 
-    static const uint32_t bsrr_lut[16] = {
-        0x04060000,  // ch=0: Reset all, Set none
-        0x04060400,  // ch=1: Reset others, Set S0(Pin10)
-        0x04060004,  // ch=2: Reset others, Set S1(Pin2)
-        0x04060404,  // ch=3: Reset others, Set S0+S1
-        0x04060002,  // ch=4: Reset others, Set S2(Pin1)
-        0x04060402,  // ch=5: Reset others, Set S0+S2
-        0x04060006,  // ch=6: Reset others, Set S1+S2
-        0x04060406,  // ch=7: Reset others, Set S0+S1+S2
-        0x04060001,  // ch=8: Reset others, Set S3(Pin0)
-        0x04060401,  // ch=9: Reset others, Set S0+S3
-        0x04060005,  // ch=10: Reset others, Set S1+S3
-        0x04060405,  // ch=11: Reset others, Set S0+S1+S3
-        0x04060003,  // ch=12: Reset others, Set S2+S3
-        0x04060403,  // ch=13: Reset others, Set S0+S2+S3
-        0x04060007,  // ch=14: Reset others, Set S1+S2+S3
-        0x04060407   // ch=15: Reset others, Set all
-    };
+    switch(ch)
+    {
+        case 0:
+            HAL_GPIO_WritePin(GPIOB, S0_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S1_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S2_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S3_Pin, GPIO_PIN_RESET);
+            break;
 
-    GPIOB->BSRR = bsrr_lut[ch];
+        case 1:
+            HAL_GPIO_WritePin(GPIOB, S0_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S1_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S2_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S3_Pin, GPIO_PIN_RESET);
+            break;
+
+        case 2:
+            HAL_GPIO_WritePin(GPIOB, S0_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S1_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S2_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S3_Pin, GPIO_PIN_RESET);
+            break;
+
+        case 3:
+            HAL_GPIO_WritePin(GPIOB, S0_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S1_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S2_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S3_Pin, GPIO_PIN_RESET);
+            break;
+
+        case 4:
+            HAL_GPIO_WritePin(GPIOB, S0_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S1_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S2_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S3_Pin, GPIO_PIN_RESET);
+            break;
+
+        case 5:
+            HAL_GPIO_WritePin(GPIOB, S0_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S1_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S2_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S3_Pin, GPIO_PIN_RESET);
+            break;
+
+        case 6:
+            HAL_GPIO_WritePin(GPIOB, S0_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S1_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S2_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S3_Pin, GPIO_PIN_RESET);
+            break;
+
+        case 7:
+            HAL_GPIO_WritePin(GPIOB, S0_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S1_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S2_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S3_Pin, GPIO_PIN_RESET);
+            break;
+
+        case 8:
+            HAL_GPIO_WritePin(GPIOB, S0_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S1_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S2_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S3_Pin, GPIO_PIN_SET);
+            break;
+
+        case 9:
+            HAL_GPIO_WritePin(GPIOB, S0_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S1_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S2_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S3_Pin, GPIO_PIN_SET);
+            break;
+
+        case 10:
+            HAL_GPIO_WritePin(GPIOB, S0_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S1_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S2_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S3_Pin, GPIO_PIN_SET);
+            break;
+
+        case 11:
+            HAL_GPIO_WritePin(GPIOB, S0_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S1_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S2_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S3_Pin, GPIO_PIN_SET);
+            break;
+
+        case 12:
+            HAL_GPIO_WritePin(GPIOB, S0_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S1_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S2_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S3_Pin, GPIO_PIN_SET);
+            break;
+
+        case 13:
+            HAL_GPIO_WritePin(GPIOB, S0_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S1_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S2_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S3_Pin, GPIO_PIN_SET);
+            break;
+
+        case 14:
+            HAL_GPIO_WritePin(GPIOB, S0_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, S1_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S2_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S3_Pin, GPIO_PIN_SET);
+            break;
+
+        case 15:
+            HAL_GPIO_WritePin(GPIOB, S0_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S1_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S2_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, S3_Pin, GPIO_PIN_SET);
+            break;
+
+        default:
+            break;
+    }
 }
 
 int16_t calculate_line_position(void) {
@@ -184,7 +280,7 @@ void set_motor_speeds(int16_t speed1, int16_t speed2) {
 }
 
 void main_pid_loop(void) {
-	if (is_calibrating || !is_running){
+	if (!is_running){
 		set_motor_speeds(0,0);
 		return;
 	}
@@ -243,30 +339,30 @@ void send_ir_data(void){
     HAL_UART_Transmit(&huart1, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
 }
 
-void calibrate(void){
-	is_running=0;
-	if (!is_calibrating)
-		return;
-
-	set_motor_speeds(600,-600);
-	HAL_Delay(100);
-
-	for (int i=0;i<NUM_SENSORS;i++){
-		uint16_t current_min=4095;
-		uint16_t current_max=0;
-		for (int j=0;j<CALIB_SAMPLES;j++){
-			current_min=MIN(adc_buffer_ptrs[adc_buffer_read_ptr_index][i],current_min);
-			current_max=MAX(adc_buffer_ptrs[adc_buffer_read_ptr_index][i],current_max);
-			HAL_Delay(10);
-		}
-		sensor_thresholds[i]=(current_min+current_max)/2;
-		HAL_Delay(20);
-	}
-
-	set_motor_speeds(0,0);
-
-	is_calibrating=0;
-}
+//void calibrate(void){
+//	is_running=0;
+//	if (!is_calibrating)
+//		return;
+//
+//	set_motor_speeds(600,-600);
+//	HAL_Delay(100);
+//
+//	for (int i=0;i<NUM_SENSORS;i++){
+//		uint16_t current_min=4095;
+//		uint16_t current_max=0;
+//		for (int j=0;j<CALIB_SAMPLES;j++){
+//			current_min=MIN(adc_buffer_ptrs[adc_buffer_read_ptr_index][i],current_min);
+//			current_max=MAX(adc_buffer_ptrs[adc_buffer_read_ptr_index][i],current_max);
+//			HAL_Delay(10);
+//		}
+//		sensor_thresholds[i]=(current_min+current_max)/2;
+//		HAL_Delay(20);
+//	}
+//
+//	set_motor_speeds(0,0);
+//
+//	is_calibrating=0;
+//}
 
 void reset_pid_variables(void) {
     integral = 0.0f;
@@ -281,7 +377,6 @@ void init_all_variables(void) {
     current_position = 0;
     line_detected = 0;
 
-    is_calibrating = 0;
     is_running = 0;
 
     adc_buffer_write_ptr_index = 0;
@@ -296,7 +391,7 @@ void init_all_variables(void) {
     }
 
     for(int i = 0; i < NUM_SENSORS; i++) {
-        sensor_thresholds[i] = 2500;
+        sensor_thresholds[i] = 2047;
     }
 
     adc_buffer_ptrs[0] = adc_buffers[0];
@@ -340,28 +435,13 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
 
     if(GPIO_Pin == BUTTON1_Pin)
-    {
-    	HAL_Delay(50);
-    	is_calibrating=0;
-    	HAL_GPIO_TogglePin(STBY_GPIO_Port, STBY_Pin);
-    	reset_pid_variables();
-    	is_running=1;
+    {//
     }
     else if(GPIO_Pin == BUTTON2_Pin)
-    {
-    	HAL_Delay(50);
-    	set_motor_speeds(0,0);
-    	is_running=0;
-    	is_calibrating=1;
-    	HAL_GPIO_WritePin(STBY_GPIO_Port, STBY_Pin,GPIO_PIN_SET);
-    	calibrate();
-    	set_motor_speeds(0,0);
-    	HAL_GPIO_WritePin(STBY_GPIO_Port, STBY_Pin,GPIO_PIN_RESET);
+    {//
     }
     else if(GPIO_Pin == BUTTON3_Pin)
-    {
-    	HAL_Delay(50);
-    	send_ir_data();
+    {//
     }
 }
 
@@ -417,8 +497,9 @@ int main(void)
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
 
   HAL_Delay(5000);
-
-
+  reset_pid_variables();
+  HAL_GPIO_WritePin(STBY_GPIO_Port, STBY_Pin, GPIO_PIN_SET);
+  is_running=1;
 
   /* USER CODE END 2 */
 
@@ -827,7 +908,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, S3_Pin|S2_Pin|S1_Pin|S0_Pin, GPIO_PIN_RESET);
@@ -869,6 +950,9 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(BUTTON1_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+
   HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 

@@ -91,6 +91,7 @@ void Error_Handler(void);
 #define STBY_GPIO_Port GPIOA
 #define BUTTON1_Pin GPIO_PIN_9
 #define BUTTON1_GPIO_Port GPIOB
+#define BUTTON1_EXTI_IRQn EXTI9_5_IRQn
 
 /* USER CODE BEGIN Private defines */
 
