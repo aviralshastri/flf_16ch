@@ -59,11 +59,11 @@ UART_HandleTypeDef huart1;
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
-#define BASE_SPEED 500         // Base PWM value
+#define BASE_SPEED 400         // Base PWM value
 #define MAX_SPEED 900          // Maximum PWM value
 #define MIN_SPEED 300          // Minimum PWM value
 
-#define KP 10.0f
+#define KP 250.0f
 #define KI 0.0f
 #define KD 0.0f
 
@@ -243,6 +243,13 @@ int16_t calculate_line_position(void) {
         }
     }
 
+    if (!sensors_on_line){
+    	line_detected=0;
+    }
+    else{
+    	line_detected=1;
+    }
+
     return weighted_sum/sensors_on_line;
 }
 
@@ -273,7 +280,6 @@ void set_motor_speeds(int16_t speed1, int16_t speed2) {
 
 void main_pid_loop(void) {
 	if (!is_running){
-		set_motor_speeds(0,0);
 		return;
 	}
 
@@ -281,18 +287,11 @@ void main_pid_loop(void) {
 
     current_position = calculate_line_position();
 
-    if (current_position==0){
-    	line_detected=0;
-    }
-    else{
-    	line_detected=1;
-    }
-
     float error = (float)current_position;
 
     float proportional = KP * error;
 
-    integral += error * dt;
+    integral += error*dt;
 
     if(integral > 1000.0f) integral = 1000.0f;
     if(integral < -1000.0f) integral = -1000.0f;
@@ -499,7 +498,6 @@ int main(void)
   reset_pid_variables();
   HAL_GPIO_WritePin(STBY_GPIO_Port, STBY_Pin, GPIO_PIN_SET);
   is_running=1;
-
   /* USER CODE END 2 */
 
   /* Infinite loop */
