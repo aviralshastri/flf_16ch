@@ -59,11 +59,11 @@ UART_HandleTypeDef huart1;
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
-#define BASE_SPEED 400         // Base PWM value
+#define BASE_SPEED 500         // Base PWM value
 #define MAX_SPEED 900          // Maximum PWM value
 #define MIN_SPEED 300          // Minimum PWM value
 
-#define KP 250.0f
+#define KP 100.0f
 #define KI 0.0f
 #define KD 0.0f
 
@@ -81,7 +81,7 @@ volatile uint8_t adc_buffer_write_ptr_index = 0;
 volatile uint8_t adc_buffer_read_ptr_index = 1;
 volatile uint8_t current_sensor_index = 0;
 volatile uint16_t adc_dma_single_value;
-const int8_t sensor_weights[16] = {-49, -36, -25, -16, -9, -4, -1, 0, 1, 4, 9, 16, 25, 36, 49,0};
+const uint16_t sensor_weights[16] = {2*-343, 2*-216, 2*-125, 2*-64, 2*-27, 2*-8, 2*-1, 2*0, 2*1, 2*8, 2*27, 2*64, 2*125, 2*216, 2*343,2*0};
 volatile uint16_t sensor_thresholds[16]= {0};
 const float dt = 0.002f;
 
