@@ -63,7 +63,7 @@ UART_HandleTypeDef huart1;
 #define MAX_SPEED 900          // Maximum PWM value
 #define MIN_SPEED 300          // Minimum PWM value
 
-#define KP 100.0f
+#define KP 20.0f
 #define KI 0.0f
 #define KD 0.0f
 
@@ -81,7 +81,7 @@ volatile uint8_t adc_buffer_write_ptr_index = 0;
 volatile uint8_t adc_buffer_read_ptr_index = 1;
 volatile uint8_t current_sensor_index = 0;
 volatile uint16_t adc_dma_single_value;
-const uint16_t sensor_weights[16] = {2*-343, 2*-216, 2*-125, 2*-64, 2*-27, 2*-8, 2*-1, 2*0, 2*1, 2*8, 2*27, 2*64, 2*125, 2*216, 2*343,2*0};
+const uint16_t sensor_weights[16] = {-7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7,0};
 volatile uint16_t sensor_thresholds[16]= {0};
 const float dt = 0.002f;
 
@@ -325,42 +325,45 @@ void main_pid_loop(void) {
 
 void send_ir_data(void){
     char buffer[256];
-    volatile uint16_t *sensor_data = adc_buffer_ptrs[adc_buffer_read_ptr_index];
 
     snprintf(buffer, sizeof(buffer),
              "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\r\n",
-             sensor_data[0], sensor_data[1], sensor_data[2], sensor_data[3],
-             sensor_data[4], sensor_data[5], sensor_data[6], sensor_data[7],
-             sensor_data[8], sensor_data[9], sensor_data[10], sensor_data[11],
-             sensor_data[12], sensor_data[13], sensor_data[14], sensor_data[15]);
+			 sensor_thresholds[0], sensor_thresholds[1], sensor_thresholds[2], sensor_thresholds[3],
+			 sensor_thresholds[4], sensor_thresholds[5], sensor_thresholds[6], sensor_thresholds[7],
+			 sensor_thresholds[8], sensor_thresholds[9], sensor_thresholds[10], sensor_thresholds[11],
+			 sensor_thresholds[12], sensor_thresholds[13], sensor_thresholds[14], sensor_thresholds[15]);
 
     HAL_UART_Transmit(&huart1, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
 }
 
-//void calibrate(void){
-//	is_running=0;
-//	if (!is_calibrating)
-//		return;
-//
-//	set_motor_speeds(600,-600);
-//	HAL_Delay(100);
-//
-//	for (int i=0;i<NUM_SENSORS;i++){
-//		uint16_t current_min=4095;
-//		uint16_t current_max=0;
-//		for (int j=0;j<CALIB_SAMPLES;j++){
-//			current_min=MIN(adc_buffer_ptrs[adc_buffer_read_ptr_index][i],current_min);
-//			current_max=MAX(adc_buffer_ptrs[adc_buffer_read_ptr_index][i],current_max);
-//			HAL_Delay(10);
-//		}
-//		sensor_thresholds[i]=(current_min+current_max)/2;
-//		HAL_Delay(20);
-//	}
-//
-//	set_motor_speeds(0,0);
-//
-//	is_calibrating=0;
-//}
+void calibrate(void){
+	    int calib_data[CALIB_SAMPLES][NUM_SENSORS];
+	    int i, j;
+
+	    set_motor_speeds(700,-700);
+	    for (i = 0; i < CALIB_SAMPLES; i++) {
+	        for (j = 0; j < NUM_SENSORS; j++) {
+	            calib_data[i][j] = adc_buffer_ptrs[adc_buffer_read_ptr_index][j];
+	            HAL_Delay(10);
+	        }
+	        HAL_Delay(10);
+	    }
+	    set_motor_speeds(0,0);
+
+	    for (j = 0; j < NUM_SENSORS; j++) {
+	        int min_val = 4095;
+	        int max_val = 0;
+
+	        for (i = 0; i < CALIB_SAMPLES; i++) {
+	            int value = calib_data[i][j];
+
+	            if (value < min_val) min_val = value;
+	            if (value > max_val) max_val = value;
+	        }
+
+	        sensor_thresholds[j] = (min_val + max_val) / 2;
+	    }
+	}
 
 void reset_pid_variables(void) {
     integral = 0.0f;
@@ -432,15 +435,6 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
 
-    if(GPIO_Pin == BUTTON1_Pin)
-    {//
-    }
-    else if(GPIO_Pin == BUTTON2_Pin)
-    {//
-    }
-    else if(GPIO_Pin == BUTTON3_Pin)
-    {//
-    }
 }
 
 
@@ -495,9 +489,11 @@ int main(void)
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
 
   HAL_Delay(5000);
-  reset_pid_variables();
-  HAL_GPIO_WritePin(STBY_GPIO_Port, STBY_Pin, GPIO_PIN_SET);
-  is_running=1;
+  HAL_GPIO_WritePin(STBY_GPIO_Port,STBY_Pin,GPIO_PIN_SET);
+  calibrate();
+
+  HAL_Delay(10000);
+  send_ir_data();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -920,12 +916,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LED_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : BUTTON2_Pin BUTTON3_Pin */
-  GPIO_InitStruct.Pin = BUTTON2_Pin|BUTTON3_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-
   /*Configure GPIO pins : S3_Pin S2_Pin S1_Pin S0_Pin */
   GPIO_InitStruct.Pin = S3_Pin|S2_Pin|S1_Pin|S0_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -939,12 +929,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(STBY_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : BUTTON1_Pin */
-  GPIO_InitStruct.Pin = BUTTON1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(BUTTON1_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
